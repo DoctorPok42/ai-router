@@ -1,0 +1,6 @@
+{
+  "name": "ai-router",
+  "description": "Automatic model and effort routing for Claude Code",
+  "owner": { "name": "DoctorPok42" },
+  "plugins": [{ "name": "auto-route", "source": "./" }]
+}
