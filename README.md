@@ -58,6 +58,9 @@ enough. To remove it: `claude plugin uninstall auto-route`.
 - The status line shows the current decision: `auto: opus/xhigh - <reason>`.
 - `/auto-route off` gives control back to `/model` and `/effort`, `/auto-route on` turns it back on,
   `/auto-route` toggles.
+- `/auto-route log` shows a summary of the recorded decisions (count per model/effort, last 5).
+- Plain acknowledgements (`ok`, `go`, `continue`, `yes`, `oui`, `thanks`, `thx`, `merci`) skip the router
+  call and keep the previous decision, which saves latency and cost.
 - Slash commands are not routed.
 - Subagents keep their own model and effort.
 - If Haiku does not answer or answers badly, the previous decision (or the session model) is kept.
@@ -68,7 +71,9 @@ enough. To remove it: `claude plugin uninstall auto-route`.
 The plugin hooks into three Claude Code events (`plugin/hooks/register.ts`):
 
 1. `prompt.submit`: sends the prompt (plus the last 3 exchanges, truncated) to Haiku, which replies with a
-   JSON `{model, effort, reason}`. An invalid reply or an unknown model is ignored.
+   JSON `{model, effort, reason}`. An invalid reply or an unknown model is ignored. Each decision is
+   appended to the plugin's own store (last 500 kept, prompts truncated to 500 characters), local to your
+   machine.
 2. `turn.step`: replaces the model and effort of the main thread with the chosen decision.
 3. `command.run`: handles the `/auto-route` command.
 
@@ -105,7 +110,7 @@ change one, change the other.
 
 ## Structure
 
-```
+```plaintext
 ai-router/
 ├── plugin/                    Claude Code plugin
 │   ├── .claude-plugin/        Manifests (plugin.json, marketplace.json)
