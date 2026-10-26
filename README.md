@@ -66,6 +66,15 @@ enough. To remove it: `claude plugin uninstall auto-route`.
 - If Haiku does not answer or answers badly, the previous decision (or the session model) is kept.
   A router failure never blocks the prompt.
 
+### Cost ceilings
+
+The plugin declares two options (set at install time or later in the `/config` menu):
+
+- `maxModel` (`haiku | sonnet | opus`, default `opus`): the router never picks a more capable model.
+- `maxEffort` (`low | medium | high | xhigh | max`, default `max`): the router never picks a higher effort.
+
+A decision above a ceiling is lowered to it. The CLI has no such option.
+
 ### How it works
 
 The plugin hooks into three Claude Code events (`plugin/hooks/register.ts`):
@@ -77,8 +86,8 @@ The plugin hooks into three Claude Code events (`plugin/hooks/register.ts`):
 2. `turn.step`: replaces the model and effort of the main thread with the chosen decision.
 3. `command.run`: handles the `/auto-route` command.
 
-The routing rules (which model for which kind of task) live in the `SYSTEM` prompt of
-`plugin/hooks/register.ts`. It is the only place to edit to adjust the behavior.
+The routing rules (which model for which kind of task) live in `plugin/hooks/rules.ts`. It is the only
+place to edit to adjust the behavior: the plugin and the CLI both import it.
 
 The model identifiers are in the `MODELS` constant of the same file: update them when new versions ship.
 
@@ -105,8 +114,8 @@ Without `npm link`: `npm start` from this folder.
   This folder is ignored by git: it contains your prompts, do not share it.
 - The router cost is displayed on each turn, next to the cost of the answer.
 
-The CLI routing rules are in `src/router.ts`. They are intentionally the same as the plugin's: if you
-change one, change the other.
+The CLI uses the same routing rules as the plugin (`plugin/hooks/rules.ts`); `src/router.ts` only adds the
+output format.
 
 ## Structure
 
@@ -114,11 +123,11 @@ change one, change the other.
 ai-router/
 ├── plugin/                    Claude Code plugin
 │   ├── .claude-plugin/        Manifests (plugin.json, marketplace.json)
-│   ├── hooks/                 hooks.json + register.ts (logic and routing rules)
+│   ├── hooks/                 hooks.json, register.ts (logic), rules.ts (routing rules, shared)
 │   └── tests/                 Plugin tests
 ├── src/
 │   ├── cli.ts                 CLI interactive loop
-│   └── router.ts              Haiku call and CLI routing rules
+│   └── router.ts              Haiku call (rules imported from plugin/hooks/rules.ts)
 ├── bin/ai                     Entry point of the `ai` command
 └── logs/                      CLI decision log (ignored by git)
 ```

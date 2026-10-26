@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { isFollowUp, parseDecision } from '../hooks/register'
+import { clamp, isFollowUp, parseDecision } from '../hooks/register'
 
 function hooks(on: any, reply: string, seen: { model?: string; effort?: unknown }[], calls = { count: 0 }) {
   mock.store(on)
@@ -71,4 +71,19 @@ test('/auto-route log reports the recorded decisions', async ($: any, on: any) =
   const r = await $.command.run({ command: 'auto-route', args: 'log' })
   expect(r.text).toContain('2 decisions (1 without a router call)')
   expect(r.text).toContain('haiku/low: 2')
+})
+
+test('clamp caps model and effort and leaves lower decisions alone', () => {
+  const d = { model: 'opus', effort: 'max', reason: 'r' } as const
+  expect(clamp(d, 'sonnet', 'high')).toEqual({ model: 'sonnet', effort: 'high', reason: 'r' })
+  expect(clamp({ model: 'haiku', effort: 'low', reason: 'r' }, 'sonnet', 'high')).toEqual({ model: 'haiku', effort: 'low', reason: 'r' })
+  expect(clamp(d, 'opus', 'max')).toEqual(d)
+})
+
+test('applies the ceilings from the plugin options', { options: { maxModel: 'sonnet', maxEffort: 'high' } }, async ($: any, on: any) => {
+  const seen: { model?: string; effort?: unknown }[] = []
+  hooks(on, '{"model":"opus","effort":"xhigh","reason":"complex bug"}', seen)
+  await $.prompt.submit({ text: 'the Keycloak session randomly expires in production', wait: false })
+  await step($)
+  expect(seen).toEqual([{ model: 'claude-sonnet-5-5', effort: 'high' }])
 })

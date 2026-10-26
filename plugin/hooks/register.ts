@@ -1,11 +1,15 @@
 import type { Register } from 'claude-code'
 
+import { ROUTING_RULES } from './rules'
+
 const MODELS = {
   haiku: 'claude-haiku-5-5',
   sonnet: 'claude-sonnet-5-5',
   opus: 'claude-opus-5-5',
 } as const
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+
+const MODEL_ORDER = Object.keys(MODELS) as (keyof typeof MODELS)[]
 
 const LOG_KEY = 'routing-log'
 const LOG_MAX = 500
@@ -18,25 +22,7 @@ type Decision = {
   reason: string
 }
 
-const SYSTEM = `You route a developer's prompt to the cheapest Claude model and effort level that will handle it well.
-You do not answer the prompt. You only output the routing decision.
-
-Models (cheapest to most capable):
-- haiku: trivial questions, a shell command, explaining a short snippet, renaming, formatting, small text edits.
-- sonnet: typical coding work: implement a function or component, fix a clear bug, write tests, edit a few files, code review of a small diff.
-- opus: multi-file refactors, bugs with an unclear cause, architecture or design decisions, migrations, security review, long or ambiguous specs.
-
-Effort:
-- low: answer is obvious, little reasoning needed.
-- medium: some reasoning, single focused task.
-- high: careful reasoning or several steps.
-- xhigh: complex agentic coding, many files or tool calls.
-- max: correctness matters more than cost and the problem is very hard.
-
-Rules:
-- Short follow-ups that continue the previous task ("ok", "go", "continue", "fix it", "and the tests?") keep the previous decision unless they clearly change difficulty.
-- Switching model invalidates the prompt cache, so only change model when the difficulty clearly changed.
-- When unsure between two levels, pick the higher one.
+const SYSTEM = `${ROUTING_RULES}
 
 Reply with only this JSON object, nothing else:
 {"model": "haiku|sonnet|opus", "effort": "low|medium|high|xhigh|max", "reason": "one short sentence in the language of the prompt"}`
@@ -75,6 +61,13 @@ export function summarize(entries: readonly LogEntry[]): string {
   ].join('\n')
 }
 
+// Caps a decision at the model and effort ceilings set in the plugin options.
+export function clamp(decision: Decision, maxModel: unknown, maxEffort: unknown): Decision {
+  const model = MODEL_ORDER[Math.min(MODEL_ORDER.indexOf(decision.model), MODEL_ORDER.indexOf(maxModel as keyof typeof MODELS))]
+  const effort = EFFORTS[Math.min(EFFORTS.indexOf(decision.effort), EFFORTS.indexOf(maxEffort as (typeof EFFORTS)[number]))]
+  return { ...decision, model: model ?? decision.model, effort: effort ?? decision.effort }
+}
+
 function clip(text: string): string {
   return text.length > 400 ? `${text.slice(0, 400)}...` : text
 }
@@ -91,7 +84,7 @@ export function parseDecision(text: string): Decision | undefined {
   }
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
   let isEnabled = true
   let current: Decision | undefined
   const history: { user: string; decision: Decision }[] = []
@@ -139,7 +132,8 @@ export const register: Register = on => {
       maxTokens: 300,
       timeoutMs: 20000,
     })
-    const decision = r.isAnswered ? parseDecision(r.text) : undefined
+    const parsed = r.isAnswered ? parseDecision(r.text) : undefined
+    const decision = parsed && clamp(parsed, options.maxModel, options.maxEffort)
     if (decision) {
       current = decision
       history.push({ user: e.text, decision })
