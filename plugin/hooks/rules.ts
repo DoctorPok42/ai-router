@@ -24,4 +24,27 @@ Effort:
 Rules:
 - Short follow-ups that continue the previous task ("ok", "go", "continue", "fix it", "and the tests?") keep the previous decision unless they clearly change difficulty.
 - Switching model invalidates the prompt cache, so only change model when the difficulty clearly changed.
+- The prompt signals (length, files mentioned, attachments) hint at the scope of the work; they are not a reason by themselves.
 - When unsure between two levels, pick the higher one.`
+
+export const PROJECT_RULES_FILE = '.claude/auto-route.md'
+const PROJECT_RULES_MAX = 4000
+
+export function withProjectRules(system: string, projectRules: string | undefined): string {
+  const rules = projectRules?.trim().slice(0, PROJECT_RULES_MAX)
+  return rules ? `${system}\n\nProject rules (they take precedence over the rules above):\n${rules}` : system
+}
+
+const FILE_MENTION = /(?:^|\s)(@\S+|[\w.~-]*\/\S*\.[A-Za-z0-9]{1,6})(?=[\s,;:)]|$)/g
+
+// Cheap scope hints for the router: size, files mentioned (@path or path/with.ext) and attachments.
+export function promptSignals(text: string, attachmentTypes: readonly string[] = []): string {
+  const files = new Set([...text.matchAll(FILE_MENTION)].map(m => m[1])).size
+  const counts = new Map<string, number>()
+  for (const type of attachmentTypes) counts.set(type, (counts.get(type) ?? 0) + 1)
+  return [
+    `${text.length} characters`,
+    files ? `${files} files mentioned` : '',
+    ...[...counts].map(([type, n]) => `${n} ${type}${n > 1 ? 's' : ''} attached`),
+  ].filter(Boolean).join(', ')
+}

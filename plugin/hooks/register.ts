@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 
-import { EFFORTS, MODELS, ROUTING_RULES } from './rules'
+import { EFFORTS, MODELS, PROJECT_RULES_FILE, ROUTING_RULES, promptSignals, withProjectRules } from './rules'
 
 const MODEL_ORDER = Object.keys(MODELS) as (keyof typeof MODELS)[]
 
@@ -8,8 +8,15 @@ const LOG_KEY = 'routing-log'
 const LOG_ENTRY_PREFIX = `${LOG_KEY}:`
 const LOG_MAX = 500
 const ROUTER_TIMEOUT_MS = 8000
+// Downgrading the model invalidates the prompt cache: wait for a second lower decision in a row.
+const DOWNGRADE_AFTER = 2
 // Unambiguous acknowledgements: they continue the previous task, no router call needed.
-const FOLLOW_UP = /^(ok|okay|go|continue|yes|y|oui|thanks|thank you|thx|merci)[\s.!]*$/i
+const ACKNOWLEDGEMENTS = [
+  'ok', 'okay', 'go', 'go on', 'go ahead', 'next', 'yes', 'y', 'thanks', 'thank you', 'thx', 'lgtm',
+  'looks good', 'sounds good', 'perfect', 'great',
+  'oui', 'merci', 'vas[- ]y', "d['’]?accord", 'parfait', 'super', 'top', 'nickel', 'allez', 'continue[zr]?', 'suite',
+].join('|')
+const FOLLOW_UP = new RegExp(`^(?:${ACKNOWLEDGEMENTS})(?:[\\s,.!]+(?:${ACKNOWLEDGEMENTS}))*[\\s.!]*$`, 'i')
 
 type Decision = {
   model: keyof typeof MODELS
@@ -87,6 +94,15 @@ export function clamp(decision: Decision, options: Record<string, unknown>): Dec
   }
 }
 
+// Keeps the current model when the router proposes a lower one, until it does so DOWNGRADE_AFTER times in a row.
+export function holdModel(proposed: Decision, current: Decision | undefined, lowerStreak: number): { decision: Decision; lowerStreak: number } {
+  if (!current || MODEL_ORDER.indexOf(proposed.model) >= MODEL_ORDER.indexOf(current.model) || lowerStreak + 1 >= DOWNGRADE_AFTER) {
+    return { decision: proposed, lowerStreak: 0 }
+  }
+  const reason = `${proposed.reason} (keeping ${current.model} to preserve the cache)`
+  return { decision: { ...proposed, model: current.model, reason }, lowerStreak: lowerStreak + 1 }
+}
+
 export function describeStatus(isEnabled: boolean, current: Decision | undefined, isPinned: boolean, options: Record<string, unknown>): string {
   return [
     `auto-route: ${isEnabled ? 'enabled' : 'disabled'}`,
@@ -123,6 +139,7 @@ export const register: Register = (on, options) => {
   let isEnabled = true
   let current: Decision | undefined
   let pinned: Decision | undefined
+  let lowerStreak = 0
   const logsPrompts = () => options.logPrompts !== false
   const history: { user: string; assistant?: string; decision: Decision }[] = []
 
@@ -192,16 +209,19 @@ export const register: Register = (on, options) => {
       .slice(-3)
       .map(h => `USER: ${clip(h.user)}\nROUTED: ${h.decision.model}/${h.decision.effort}${h.assistant ? `\nASSISTANT: ${clip(h.assistant)}` : ''}`)
       .join('\n\n')
+    const projectRules = await $.fs.read(PROJECT_RULES_FILE).catch(() => undefined)
     const r = await $.model.complete({
       model: 'haiku',
       effort: 'low',
-      system: SYSTEM,
-      prompt: `${context ? `Recent conversation:\n${context}\n\n` : ''}New prompt to route:\n${e.text}`,
+      system: withProjectRules(SYSTEM, projectRules),
+      prompt: `${context ? `Recent conversation:\n${context}\n\n` : ''}Prompt signals: ${promptSignals(e.text, e.attachments?.map(a => a.type))}\n\nNew prompt to route:\n${e.text}`,
       maxTokens: 300,
       timeoutMs: ROUTER_TIMEOUT_MS,
     })
     const parsed = r.isAnswered ? parseDecision(r.text) : undefined
-    const decision = parsed && clamp(parsed, options)
+    const held = parsed && holdModel(parsed, current, lowerStreak)
+    const decision = held && clamp(held.decision, options)
+    if (held) lowerStreak = held.lowerStreak
     if (decision) {
       current = decision
       history.push({ user: e.text, decision })

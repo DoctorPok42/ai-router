@@ -65,25 +65,28 @@ enough. To remove it: `claude plugin uninstall auto-route`.
   also drops the pin.
 - `/auto-route log` shows a summary of the recorded decisions (count per model/effort, last 5).
   `/auto-route log clear` deletes the log.
-- Plain acknowledgements (`ok`, `okay`, `go`, `continue`, `yes`, `y`, `oui`, `thanks`, `thank you`, `thx`, `merci`) skip the router
-  call and keep the previous decision, which saves latency and cost.
-- Slash commands are not routed.
-- Subagents keep their own model and effort.
-- If Haiku does not answer or answers badly, the previous decision (or the session model) is kept.
-  A router failure never blocks the prompt.
+- Plain acknowledgements skip the router call and keep the previous decision, which saves latency and cost.
+  They are matched as whole messages, alone or combined: `ok`, `okay`, `go`, `go on`, `go ahead`, `next`,
+  `yes`, `y`, `thanks`, `thank you`, `thx`, `lgtm`, `looks good`, `sounds good`, `perfect`, `great`, `oui`,
+  `merci`, `vas-y`, `d'accord`, `parfait`, `super`, `top`, `nickel`, `allez`, `continue`, `suite` (e.g.
+  `ok merci`).
+- The model only goes down after two lower decisions in a row, because switching model invalidates the
+  prompt cache. Going up is immediate, and the effort always follows the router.
+- The router also receives scope hints with each prompt: its length, the number of files mentioned
+  (`@path` or `dir/file.ext`) and the attachments (images, documents).
 
-### Limits and privacy
+### Project rules
 
-The plugin declares options (set at install time or later in the `/config` menu):
+Put your own routing rules in `.claude/auto-route.md` at the root of a project (the working directory).
+They are appended to the built-in rules, take precedence over them, and are read on every routed prompt
+(first 4000 characters). For example:
 
-- `maxModel` (`haiku | sonnet | opus`, default `opus`): the router never picks a more capable model.
-- `maxEffort` (`low | medium | high | xhigh | max`, default `max`): the router never picks a higher effort.
-- `minModel` (default `haiku`) and `minEffort` (default `low`): the router never picks a lower pair, for
-  example `minModel: sonnet` to keep Haiku for routing only. If a floor is above a ceiling, the ceiling wins.
-- `logPrompts` (default `true`): set it to `false` to keep only the model and effort of each decision in
-  the log, without the prompt text.
+```md
+- Anything under `billing/` is opus, effort high at least.
+- Documentation and changelog edits are haiku.
+```
 
-A decision outside the limits is brought back to the nearest one. The CLI has no such options.
+The CLI reads the same file from its working directory. A missing file changes nothing.
 
 ### How it works
 
@@ -91,8 +94,8 @@ The plugin hooks into three Claude Code events (`plugin/hooks/register.ts`):
 
 1. `prompt.submit`: sends the prompt (plus the last 3 exchanges, truncated) to Haiku, which replies with a
    JSON `{model, effort, reason}`. An invalid reply or an unknown model is ignored. Each decision is
-   appended to the plugin's own store (last 500 kept, prompts truncated to 500 characters unless `logPrompts` is off), local to your
-   machine.
+   appended to the plugin's own store (last 500 kept, prompts truncated to 500 characters unless
+   `logPrompts` is off), local to your machine.
 2. `turn.step`: replaces the model and effort of the main thread with the chosen decision.
 3. `command.run`: handles the `/auto-route` command.
 

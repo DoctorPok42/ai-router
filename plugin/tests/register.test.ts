@@ -1,6 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { clamp, isFollowUp, parseDecision } from '../hooks/register'
+import { clamp, holdModel, isFollowUp, parseDecision } from '../hooks/register'
+import { promptSignals } from '../hooks/rules'
 
 function hooks(on: any, reply: string, seen: { model?: string; effort?: unknown }[], calls = { count: 0 }, prompts: string[] = []) {
   mock.store(on)
@@ -249,4 +250,78 @@ test('an unknown /auto-route argument shows the usage and changes nothing', asyn
   hooks(on, ROUTED, [])
   expect((await run($, 'bogus')).text).toContain('usage: /auto-route')
   expect((await run($, 'status')).text).toContain('auto-route: enabled')
+})
+
+test('isFollowUp accepts French and English acknowledgements, alone or combined', () => {
+  for (const text of ['vas-y', "d'accord", 'ok merci', 'LGTM', 'go on', 'Parfait !', 'ok, go']) expect(isFollowUp(text)).toBe(true)
+  for (const text of ['next steps for the migration?', 'ok and the tests?', 'merci de corriger le bug', 'no']) expect(isFollowUp(text)).toBe(false)
+})
+
+const D = (model: 'haiku' | 'sonnet' | 'opus', effort: 'low' | 'high' = 'low') => ({ model, effort, reason: 'r' }) as const
+
+test('holdModel switches up at once and down only on the second lower decision in a row', () => {
+  expect(holdModel(D('opus'), D('sonnet'), 0)).toEqual({ decision: D('opus'), lowerStreak: 0 })
+  expect(holdModel(D('opus'), undefined, 0)).toEqual({ decision: D('opus'), lowerStreak: 0 })
+  const first = holdModel(D('haiku', 'high'), D('opus'), 0)
+  expect(first.decision).toMatchObject({ model: 'opus', effort: 'high' })
+  expect(first.decision.reason).toContain('keeping opus')
+  expect(first.lowerStreak).toBe(1)
+  expect(holdModel(D('haiku'), D('opus'), 1)).toEqual({ decision: D('haiku'), lowerStreak: 0 })
+})
+
+test('promptSignals reports size, files mentioned and attachments', () => {
+  expect(promptSignals('hello')).toBe('5 characters')
+  expect(promptSignals('see @src/a.ts and plugin/hooks/b.ts, then @src/a.ts', ['image', 'image', 'document'])).toBe(
+    '51 characters, 2 files mentioned, 2 images attached, 1 document attached',
+  )
+  expect(promptSignals('version 1.2 e.g. this')).toBe('21 characters')
+})
+
+test('keeps the model after a single lower decision, then lets it drop', async ($: any, on: any) => {
+  const seen: { model?: string; effort?: unknown }[] = []
+  const replies = [
+    '{"model":"opus","effort":"high","reason":"hard"}',
+    '{"model":"haiku","effort":"low","reason":"trivial"}',
+    '{"model":"haiku","effort":"low","reason":"trivial"}',
+  ]
+  mock.store(on)
+  on('model.complete', () => COMPLETE(replies.shift()!))
+  on('prompt.submit', ($: unknown, e: { text: string }) => ({ text: e.text }))
+  on('ui.status', () => ({ value: undefined }))
+  on('turn.step', async function* ($: unknown, e: any) {
+    seen.push({ model: e.model, effort: e.effort })
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn' }
+  })
+  for (const text of ['a hard problem', 'rename x', 'rename y']) {
+    await $.prompt.submit({ text, wait: false })
+    await step($)
+  }
+  expect(seen).toEqual([
+    { model: 'claude-opus-5-5', effort: 'high' },
+    { model: 'claude-opus-5-5', effort: 'low' },
+    { model: 'claude-haiku-5-5', effort: 'low' },
+  ])
+})
+
+test('sends the prompt signals and the project rules to the router', async ($: any, on: any) => {
+  const seen: { system: string; prompt: string }[] = []
+  mock.store(on)
+  on('fs.read', () => ({ value: '  Always use opus for anything under billing/.  ' }))
+  on('model.complete', (_: unknown, e: { system: string; prompt: string }) => (seen.push(e), COMPLETE(ROUTED)))
+  on('prompt.submit', ($: unknown, e: { text: string }) => ({ text: e.text }))
+  on('ui.status', () => ({ value: undefined }))
+  await $.prompt.submit({ text: 'look at @billing/invoice.ts', attachments: [{ type: 'image' }], wait: false })
+  expect(seen[0].prompt).toContain('Prompt signals: 27 characters, 1 files mentioned, 1 image attached')
+  expect(seen[0].system).toContain('Project rules (they take precedence over the rules above):\nAlways use opus for anything under billing/.')
+})
+
+test('a missing project rules file leaves the system prompt unchanged', async ($: any, on: any) => {
+  const seen: { system: string }[] = []
+  mock.store(on)
+  on('fs.read', () => { throw new Error('ENOENT') })
+  on('model.complete', (_: unknown, e: { system: string }) => (seen.push(e), COMPLETE(ROUTED)))
+  on('prompt.submit', ($: unknown, e: { text: string }) => ({ text: e.text }))
+  on('ui.status', () => ({ value: undefined }))
+  await $.prompt.submit({ text: 'hello', wait: false })
+  expect(seen[0].system).not.toContain('Project rules')
 })

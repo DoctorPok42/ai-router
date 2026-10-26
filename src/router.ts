@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { EFFORTS, MODELS as MODEL_IDS, ROUTING_RULES } from "../plugin/hooks/rules.ts";
+import { EFFORTS, MODELS as MODEL_IDS, PROJECT_RULES_FILE, ROUTING_RULES, promptSignals, withProjectRules } from "../plugin/hooks/rules.ts";
 
 const MODELS = Object.keys(MODEL_IDS) as (keyof typeof MODEL_IDS)[];
 export type Model = keyof typeof MODEL_IDS;
@@ -22,6 +24,14 @@ const SCHEMA = {
 const SYSTEM = `${ROUTING_RULES}
 - reason: one short sentence, in the language of the prompt.`;
 
+function readProjectRules(): string | undefined {
+  try {
+    return readFileSync(join(process.cwd(), PROJECT_RULES_FILE), "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 function clip(s: string, n: number): string {
   return s.length > n ? s.slice(0, n) + "..." : s;
 }
@@ -39,11 +49,11 @@ export async function route(
     .join("\n\n");
 
   const q = query({
-    prompt: `${context ? `Recent conversation:\n${context}\n\n` : ""}New prompt to route:\n${prompt}`,
+    prompt: `${context ? `Recent conversation:\n${context}\n\n` : ""}Prompt signals: ${promptSignals(prompt)}\n\nNew prompt to route:\n${prompt}`,
     options: {
       model: "haiku",
       effort: "low",
-      systemPrompt: SYSTEM,
+      systemPrompt: withProjectRules(SYSTEM, readProjectRules()),
       tools: [],
       settingSources: [],
       persistSession: false,
