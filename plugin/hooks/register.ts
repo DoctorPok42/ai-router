@@ -7,6 +7,7 @@ const MODEL_ORDER = Object.keys(MODELS) as (keyof typeof MODELS)[]
 const LOG_KEY = 'routing-log'
 const LOG_ENTRY_PREFIX = `${LOG_KEY}:`
 const LOG_MAX = 500
+const HISTORY_MAX = 3
 const ROUTER_TIMEOUT_MS = 8000
 // Downgrading the model invalidates the prompt cache: wait for a second lower decision in a row.
 const DOWNGRADE_AFTER = 2
@@ -58,6 +59,17 @@ async function clearLog(store: Store): Promise<number> {
   const count = (await readLog(store)).length
   await Promise.all([store.delete(LOG_KEY), ...(await entryKeys(store)).map(k => store.delete(k))])
   return count
+}
+
+// With prompt logging off, nothing derived from the prompt is kept: the router's reason paraphrases it.
+export function toEntry(decision: Decision, input: string, source: LogEntry['source'], logsPrompts: boolean): LogEntry {
+  return {
+    ...decision,
+    reason: logsPrompts ? decision.reason : '',
+    at: new Date().toISOString(),
+    input: logsPrompts ? input.slice(0, 500) : '',
+    source,
+  }
 }
 
 export function isFollowUp(text: string): boolean {
@@ -142,6 +154,10 @@ export const register: Register = (on, options) => {
   let lowerStreak = 0
   const logsPrompts = () => options.logPrompts !== false
   const history: { user: string; assistant?: string; decision: Decision }[] = []
+  const remember = (exchange: (typeof history)[number]) => {
+    history.push(exchange)
+    if (history.length > HISTORY_MAX) history.shift()
+  }
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -200,13 +216,12 @@ export const register: Register = (on, options) => {
 
     const store = storeOf($)
     if (current && isFollowUp(e.text)) {
-      history.push({ user: e.text, decision: current })
-      await record(store, { ...current, at: new Date().toISOString(), input: logsPrompts() ? e.text : '', source: 'follow-up' }).catch(() => {})
+      remember({ user: e.text, decision: current })
+      await record(store, toEntry(current, e.text, 'follow-up', logsPrompts())).catch(() => {})
       return next(e)
     }
 
     const context = history
-      .slice(-3)
       .map(h => `USER: ${clip(h.user)}\nROUTED: ${h.decision.model}/${h.decision.effort}${h.assistant ? `\nASSISTANT: ${clip(h.assistant)}` : ''}`)
       .join('\n\n')
     const projectRules = await $.fs.read(PROJECT_RULES_FILE).catch(() => undefined)
@@ -224,8 +239,8 @@ export const register: Register = (on, options) => {
     if (held) lowerStreak = held.lowerStreak
     if (decision) {
       current = decision
-      history.push({ user: e.text, decision })
-      await record(store, { ...decision, at: new Date().toISOString(), input: logsPrompts() ? e.text.slice(0, 500) : '', source: 'haiku' }).catch(() => {})
+      remember({ user: e.text, decision })
+      await record(store, toEntry(decision, e.text, 'haiku', logsPrompts())).catch(() => {})
     }
     $.ui.status(
       !current

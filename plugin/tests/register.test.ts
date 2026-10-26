@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 
-import { clamp, holdModel, isFollowUp, parseDecision } from '../hooks/register'
+import { clamp, holdModel, isFollowUp, parseDecision, toEntry } from '../hooks/register'
 import { promptSignals } from '../hooks/rules'
 
 function hooks(on: any, reply: string, seen: { model?: string; effort?: unknown }[], calls = { count: 0 }, prompts: string[] = []) {
@@ -324,4 +324,29 @@ test('a missing project rules file leaves the system prompt unchanged', async ($
   on('ui.status', () => ({ value: undefined }))
   await $.prompt.submit({ text: 'hello', wait: false })
   expect(seen[0].system).not.toContain('Project rules')
+})
+
+test('toEntry keeps the prompt and the reason only when prompt logging is on', () => {
+  const decision = { model: 'opus', effort: 'high', reason: 'Keycloak session bug in billing' } as const
+  expect(toEntry(decision, 'the Keycloak session expires', 'haiku', true)).toMatchObject({
+    ...decision,
+    input: 'the Keycloak session expires',
+    source: 'haiku',
+  })
+  const redacted = toEntry(decision, 'the Keycloak session expires', 'haiku', false)
+  expect(redacted).toMatchObject({ model: 'opus', effort: 'high', reason: '', input: '', source: 'haiku' })
+  expect(JSON.stringify(redacted)).not.toContain('Keycloak')
+})
+
+test('toEntry truncates long prompts to 500 characters', () => {
+  expect(toEntry({ model: 'haiku', effort: 'low', reason: 'r' }, 'x'.repeat(900), 'haiku', true).input).toHaveLength(500)
+})
+
+test('only the last 3 exchanges are sent to the router', async ($: any, on: any) => {
+  const prompts: string[] = []
+  hooks(on, ROUTED, [], undefined, prompts)
+  for (const n of [1, 2, 3, 4, 5, 6]) await $.prompt.submit({ text: `question number ${n}`, wait: false })
+  const context = prompts.at(-1)!
+  expect(context).not.toContain('question number 2')
+  for (const n of [3, 4, 5]) expect(context).toContain(`question number ${n}`)
 })

@@ -90,7 +90,7 @@ The CLI reads the same file from its working directory. A missing file changes n
 
 ### How it works
 
-The plugin hooks into three Claude Code events (`plugin/hooks/register.ts`):
+The plugin hooks into four Claude Code events (`plugin/hooks/register.ts`):
 
 1. `prompt.submit`: sends the prompt (plus the last 3 exchanges, truncated) to Haiku, which replies with a
    JSON `{model, effort, reason}`. An invalid reply or an unknown model is ignored. Each decision is
@@ -98,6 +98,7 @@ The plugin hooks into three Claude Code events (`plugin/hooks/register.ts`):
    `logPrompts` is off), local to your machine.
 2. `turn.step`: replaces the model and effort of the main thread with the chosen decision.
 3. `command.run`: handles the `/auto-route` command.
+4. `session.start`: registers the `/auto-route` command.
 
 The routing rules (which model for which kind of task) live in `plugin/hooks/rules.ts`. It is the only
 place to edit to adjust the behavior: the plugin and the CLI both import it.
@@ -108,7 +109,7 @@ The model identifiers are in the `MODELS` constant of the same file: update them
 
 ```sh
 npm test                      # same as: claude plugin test plugin
-claude plugin validate plugin
+claude plugin validate plugin # syntax and manifest only, it does not type-check the hooks
 ```
 
 ## Standalone CLI
@@ -148,6 +149,6 @@ ai-router/
 ## Development
 
 ```sh
-npm run typecheck   # checks src/ (the plugin is checked by `claude plugin validate`)
+npm run typecheck   # checks src/ only: plugin/hooks/register.ts and the tests are not type-checked
 npm test            # plugin tests
 ```
