@@ -1,9 +1,8 @@
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { ROUTING_RULES } from "../plugin/hooks/rules.ts";
+import { EFFORTS, MODELS as MODEL_IDS, ROUTING_RULES } from "../plugin/hooks/rules.ts";
 
-export const MODELS = ["haiku", "sonnet", "opus"] as const;
-export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
-export type Model = (typeof MODELS)[number];
+const MODELS = Object.keys(MODEL_IDS) as (keyof typeof MODEL_IDS)[];
+export type Model = keyof typeof MODEL_IDS;
 export type Effort = (typeof EFFORTS)[number];
 
 export type Decision = { model: Model; effort: Effort; reason: string };

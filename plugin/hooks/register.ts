@@ -1,18 +1,13 @@
 import type { Register } from 'claude-code'
 
-import { ROUTING_RULES } from './rules'
-
-const MODELS = {
-  haiku: 'claude-haiku-5-5',
-  sonnet: 'claude-sonnet-5-5',
-  opus: 'claude-opus-5-5',
-} as const
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+import { EFFORTS, MODELS, ROUTING_RULES } from './rules'
 
 const MODEL_ORDER = Object.keys(MODELS) as (keyof typeof MODELS)[]
 
 const LOG_KEY = 'routing-log'
+const LOG_ENTRY_PREFIX = `${LOG_KEY}:`
 const LOG_MAX = 500
+const ROUTER_TIMEOUT_MS = 8000
 // Unambiguous acknowledgements: they continue the previous task, no router call needed.
 const FOLLOW_UP = /^(ok|okay|go|continue|yes|y|oui|thanks|thank you|thx|merci)[\s.!]*$/i
 
@@ -31,15 +26,25 @@ type LogEntry = Decision & { at: string; input: string; source: 'haiku' | 'follo
 type Store = {
   get: (key: string) => Promise<unknown>
   set: (key: string, value: unknown) => Promise<void>
+  delete: (key: string) => Promise<void>
+  keys: () => Promise<string[]>
+}
+
+// One key per entry: sessions share the store and a get-then-set on a single key would overwrite each other.
+async function entryKeys(store: Store): Promise<string[]> {
+  return (await store.keys()).filter(k => k.startsWith(LOG_ENTRY_PREFIX)).sort()
 }
 
 async function readLog(store: Store): Promise<LogEntry[]> {
-  const value = await store.get(LOG_KEY)
-  return Array.isArray(value) ? (value as LogEntry[]) : []
+  const legacy = await store.get(LOG_KEY)
+  const entries = await Promise.all((await entryKeys(store)).map(k => store.get(k)))
+  return [...(Array.isArray(legacy) ? legacy : []), ...entries].slice(-LOG_MAX) as LogEntry[]
 }
 
 async function record(store: Store, entry: LogEntry): Promise<void> {
-  await store.set(LOG_KEY, [...(await readLog(store)), entry].slice(-LOG_MAX))
+  await store.set(`${LOG_ENTRY_PREFIX}${String(Date.now()).padStart(13, '0')}-${Math.random().toString(36).slice(2, 8)}`, entry)
+  const keys = await entryKeys(store)
+  await Promise.all(keys.slice(0, -LOG_MAX).map(k => store.delete(k)))
 }
 
 export function isFollowUp(text: string): boolean {
@@ -77,17 +82,24 @@ export function parseDecision(text: string): Decision | undefined {
   if (!json) return undefined
   try {
     const d = JSON.parse(json[0])
-    if (!(d.model in MODELS) || !EFFORTS.includes(d.effort)) return undefined
+    if (!Object.hasOwn(MODELS, d.model) || !EFFORTS.includes(d.effort)) return undefined
     return { model: d.model, effort: d.effort, reason: String(d.reason ?? '') }
   } catch {
     return undefined
   }
 }
 
+const storeOf = ($: { store: Store }): Store => ({
+  get: k => $.store.get(k),
+  set: (k, v) => $.store.set(k, v),
+  delete: k => $.store.delete(k),
+  keys: () => $.store.keys(),
+})
+
 export const register: Register = (on, options) => {
   let isEnabled = true
   let current: Decision | undefined
-  const history: { user: string; decision: Decision }[] = []
+  const history: { user: string; assistant?: string; decision: Decision }[] = []
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
@@ -100,10 +112,11 @@ export const register: Register = (on, options) => {
 
   on('command.run', { command: 'auto-route' }, async ($, e) => {
     const arg = e.args.trim()
-    if (arg === 'log') return { text: summarize(await readLog({ get: k => $.store.get(k), set: (k, v) => $.store.set(k, v) })) }
+    if (arg === 'log') return { text: summarize(await readLog(storeOf($))) }
     isEnabled = arg === 'on' ? true : arg === 'off' ? false : !isEnabled
     if (!isEnabled) {
       current = undefined
+      history.length = 0
       $.ui.status(undefined)
     }
 
@@ -114,15 +127,16 @@ export const register: Register = (on, options) => {
   on('prompt.submit', async ($, e, next) => {
     if (!isEnabled || e.text.startsWith('/')) return next(e)
 
-    const store: Store = { get: k => $.store.get(k), set: (k, v) => $.store.set(k, v) }
+    const store = storeOf($)
     if (current && isFollowUp(e.text)) {
+      history.push({ user: e.text, decision: current })
       await record(store, { ...current, at: new Date().toISOString(), input: e.text, source: 'follow-up' }).catch(() => {})
       return next(e)
     }
 
     const context = history
       .slice(-3)
-      .map(h => `USER: ${clip(h.user)}\nROUTED: ${h.decision.model}/${h.decision.effort}`)
+      .map(h => `USER: ${clip(h.user)}\nROUTED: ${h.decision.model}/${h.decision.effort}${h.assistant ? `\nASSISTANT: ${clip(h.assistant)}` : ''}`)
       .join('\n\n')
     const r = await $.model.complete({
       model: 'haiku',
@@ -130,7 +144,7 @@ export const register: Register = (on, options) => {
       system: SYSTEM,
       prompt: `${context ? `Recent conversation:\n${context}\n\n` : ''}New prompt to route:\n${e.text}`,
       maxTokens: 300,
-      timeoutMs: 20000,
+      timeoutMs: ROUTER_TIMEOUT_MS,
     })
     const parsed = r.isAnswered ? parseDecision(r.text) : undefined
     const decision = parsed && clamp(parsed, options.maxModel, options.maxEffort)
@@ -140,9 +154,11 @@ export const register: Register = (on, options) => {
       await record(store, { ...decision, at: new Date().toISOString(), input: e.text.slice(0, 500), source: 'haiku' }).catch(() => {})
     }
     $.ui.status(
-      current
-        ? `auto: ${current.model}/${current.effort} - ${current.reason}`
-        : 'auto: router unavailable, using session model',
+      !current
+        ? 'auto: router unavailable, using session model'
+        : decision
+          ? `auto: ${current.model}/${current.effort} - ${current.reason}`
+          : `auto: ${current.model}/${current.effort} (stale) - router unavailable`,
     )
 
     return next(e)
@@ -152,6 +168,10 @@ export const register: Register = (on, options) => {
   on('turn.step', async function* ($, e, next) {
     if (!isEnabled || !current || e.agentId) return yield* next(e)
 
-    return yield* next({ ...e, model: MODELS[current.model], effort: current.effort })
+    const result = yield* next({ ...e, model: MODELS[current.model], effort: current.effort })
+    const last = history.at(-1)
+    if (last && result?.answer) last.assistant = result.answer
+
+    return result
   })
 }

@@ -59,7 +59,7 @@ enough. To remove it: `claude plugin uninstall auto-route`.
 - `/auto-route off` gives control back to `/model` and `/effort`, `/auto-route on` turns it back on,
   `/auto-route` toggles.
 - `/auto-route log` shows a summary of the recorded decisions (count per model/effort, last 5).
-- Plain acknowledgements (`ok`, `go`, `continue`, `yes`, `oui`, `thanks`, `thx`, `merci`) skip the router
+- Plain acknowledgements (`ok`, `okay`, `go`, `continue`, `yes`, `y`, `oui`, `thanks`, `thank you`, `thx`, `merci`) skip the router
   call and keep the previous decision, which saves latency and cost.
 - Slash commands are not routed.
 - Subagents keep their own model and effort.

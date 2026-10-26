@@ -1,6 +1,5 @@
 {
   "name": "ai-router",
-  "version": "1.0.0",
   "description": "Claude Code with automatic model and effort selection for every prompt",
   "author": "DoctorPok42",
   "private": true,

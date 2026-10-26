@@ -1,4 +1,11 @@
 // Routing rules shared by the plugin (hooks/register.ts) and the standalone CLI (src/router.ts).
+export const MODELS = {
+  haiku: 'claude-haiku-5-5',
+  sonnet: 'claude-sonnet-5-5',
+  opus: 'claude-opus-5-5',
+} as const
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+
 export const ROUTING_RULES = `You route a developer's prompt to the cheapest Claude model and effort level that will handle it well.
 You do not answer the prompt. You only output the routing decision.
 
