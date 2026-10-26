@@ -79,9 +79,16 @@ test('/auto-route log reports the recorded decisions', async ($: any, on: any) =
 
 test('clamp caps model and effort and leaves lower decisions alone', () => {
   const d = { model: 'opus', effort: 'max', reason: 'r' } as const
-  expect(clamp(d, 'sonnet', 'high')).toEqual({ model: 'sonnet', effort: 'high', reason: 'r' })
-  expect(clamp({ model: 'haiku', effort: 'low', reason: 'r' }, 'sonnet', 'high')).toEqual({ model: 'haiku', effort: 'low', reason: 'r' })
-  expect(clamp(d, 'opus', 'max')).toEqual(d)
+  expect(clamp(d, { maxModel: 'sonnet', maxEffort: 'high' })).toEqual({ model: 'sonnet', effort: 'high', reason: 'r' })
+  expect(clamp({ model: 'haiku', effort: 'low', reason: 'r' }, { maxModel: 'sonnet', maxEffort: 'high' })).toEqual({ model: 'haiku', effort: 'low', reason: 'r' })
+  expect(clamp(d, { maxModel: 'opus', maxEffort: 'max' })).toEqual(d)
+  expect(clamp(d, {})).toEqual(d)
+})
+
+test('clamp raises a decision to the floors and lets the ceiling win on conflict', () => {
+  const low = { model: 'haiku', effort: 'low', reason: 'r' } as const
+  expect(clamp(low, { minModel: 'sonnet', minEffort: 'medium' })).toEqual({ model: 'sonnet', effort: 'medium', reason: 'r' })
+  expect(clamp(low, { minModel: 'opus', maxModel: 'sonnet' }).model).toBe('sonnet')
 })
 
 test('applies the ceilings from the plugin options', { options: { maxModel: 'sonnet', maxEffort: 'high' } }, async ($: any, on: any) => {
@@ -166,4 +173,80 @@ test('still reads the log stored under the former single key', async ($: any, on
   const r = await $.command.run({ command: 'auto-route', args: 'log' })
   expect(r.text).toContain('2 decisions')
   expect(r.text).toContain('opus/max: 1')
+})
+
+const ROUTED = '{"model":"haiku","effort":"low","reason":"trivial"}'
+const run = ($: any, args: string) => $.command.run({ command: 'auto-route', args })
+
+test('/auto-route pin applies the pair without calling the router', async ($: any, on: any) => {
+  const seen: { model?: string; effort?: unknown }[] = []
+  const calls = { count: 0 }
+  hooks(on, ROUTED, seen, calls)
+  const r = await run($, 'pin opus high')
+  expect(r.text).toBe('auto-route pinned to opus/high')
+  await $.prompt.submit({ text: 'rename this variable', wait: false })
+  await step($)
+  expect(calls.count).toBe(0)
+  expect(seen).toEqual([{ model: 'claude-opus-5-5', effort: 'high' }])
+})
+
+test('/auto-route pin respects the plugin ceilings and says so', { options: { maxModel: 'sonnet' } }, async ($: any, on: any) => {
+  hooks(on, ROUTED, [])
+  const r = await run($, 'pin opus high')
+  expect(r.text).toContain('pinned to sonnet/high')
+  expect(r.text).toContain('opus/high requested')
+})
+
+test('/auto-route pin rejects an unknown pair', async ($: any, on: any) => {
+  hooks(on, ROUTED, [])
+  expect((await run($, 'pin fable max')).text).toContain('usage: /auto-route pin')
+  expect((await run($, 'pin opus')).text).toContain('usage: /auto-route pin')
+})
+
+test('/auto-route unpin resumes routing', async ($: any, on: any) => {
+  const calls = { count: 0 }
+  hooks(on, ROUTED, [], calls)
+  expect((await run($, 'unpin')).text).toBe('auto-route: nothing is pinned')
+  await run($, 'pin opus high')
+  await run($, 'unpin')
+  await $.prompt.submit({ text: 'what does ls -la do', wait: false })
+  expect(calls.count).toBe(1)
+})
+
+test('/auto-route off drops the pin', async ($: any, on: any) => {
+  hooks(on, ROUTED, [])
+  await run($, 'pin opus high')
+  await run($, 'off')
+  expect((await run($, 'status')).text).toContain('decision: none yet')
+})
+
+test('/auto-route status reports the state, the pin and the limits', { options: { minModel: 'sonnet', logPrompts: false } }, async ($: any, on: any) => {
+  hooks(on, ROUTED, [])
+  expect((await run($, 'status')).text).toBe(
+    'auto-route: enabled\ndecision: none yet\nlimits: sonnet/low to opus/max\nprompts in the log: no',
+  )
+  await run($, 'pin sonnet medium')
+  expect((await run($, 'status')).text).toContain('decision: sonnet/medium (pinned)')
+})
+
+test('/auto-route log clear empties the log', async ($: any, on: any) => {
+  hooks(on, ROUTED, [])
+  await $.prompt.submit({ text: 'what does ls -la do', wait: false })
+  await $.prompt.submit({ text: 'ok', wait: false })
+  expect((await run($, 'log clear')).text).toBe('auto-route log cleared (2 decisions)')
+  expect((await run($, 'log')).text).toContain('no decision recorded yet')
+})
+
+test('logPrompts off keeps the decisions but not the prompt text', { options: { logPrompts: false } }, async ($: any, on: any) => {
+  hooks(on, ROUTED, [])
+  await $.prompt.submit({ text: 'my secret prompt', wait: false })
+  const r = await run($, 'log')
+  expect(r.text).toContain('1 decisions')
+  expect(r.text).not.toContain('secret')
+})
+
+test('an unknown /auto-route argument shows the usage and changes nothing', async ($: any, on: any) => {
+  hooks(on, ROUTED, [])
+  expect((await run($, 'bogus')).text).toContain('usage: /auto-route')
+  expect((await run($, 'status')).text).toContain('auto-route: enabled')
 })

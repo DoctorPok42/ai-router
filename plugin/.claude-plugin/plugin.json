@@ -6,6 +6,17 @@
     "name": "DoctorPok42"
   },
   "userConfig": {
+    "minModel": {
+      "type": "string",
+      "title": "Minimum model",
+      "description": "Least capable model the router may pick",
+      "default": "haiku",
+      "options": [
+        "haiku",
+        "sonnet",
+        "opus"
+      ]
+    },
     "maxModel": {
       "type": "string",
       "title": "Maximum model",
@@ -15,6 +26,19 @@
         "haiku",
         "sonnet",
         "opus"
+      ]
+    },
+    "minEffort": {
+      "type": "string",
+      "title": "Minimum effort",
+      "description": "Lowest effort the router may pick",
+      "default": "low",
+      "options": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
       ]
     },
     "maxEffort": {
@@ -29,6 +53,12 @@
         "xhigh",
         "max"
       ]
+    },
+    "logPrompts": {
+      "type": "boolean",
+      "title": "Log prompts",
+      "description": "Keep the text of each prompt in the decision log (turn off for privacy: only model and effort are kept)",
+      "default": true
     }
   }
 }

@@ -58,7 +58,13 @@ enough. To remove it: `claude plugin uninstall auto-route`.
 - The status line shows the current decision: `auto: opus/xhigh - <reason>`.
 - `/auto-route off` gives control back to `/model` and `/effort`, `/auto-route on` turns it back on,
   `/auto-route` toggles.
+- `/auto-route status` shows whether routing is on, the current decision, the min/max limits and whether
+  prompts are logged.
+- `/auto-route pin <model> <effort>` (e.g. `pin opus high`) forces a pair for the rest of the session and
+  skips the router call. The min/max limits still apply. `/auto-route unpin` resumes routing, and `off`
+  also drops the pin.
 - `/auto-route log` shows a summary of the recorded decisions (count per model/effort, last 5).
+  `/auto-route log clear` deletes the log.
 - Plain acknowledgements (`ok`, `okay`, `go`, `continue`, `yes`, `y`, `oui`, `thanks`, `thank you`, `thx`, `merci`) skip the router
   call and keep the previous decision, which saves latency and cost.
 - Slash commands are not routed.
@@ -66,14 +72,18 @@ enough. To remove it: `claude plugin uninstall auto-route`.
 - If Haiku does not answer or answers badly, the previous decision (or the session model) is kept.
   A router failure never blocks the prompt.
 
-### Cost ceilings
+### Limits and privacy
 
-The plugin declares two options (set at install time or later in the `/config` menu):
+The plugin declares options (set at install time or later in the `/config` menu):
 
 - `maxModel` (`haiku | sonnet | opus`, default `opus`): the router never picks a more capable model.
 - `maxEffort` (`low | medium | high | xhigh | max`, default `max`): the router never picks a higher effort.
+- `minModel` (default `haiku`) and `minEffort` (default `low`): the router never picks a lower pair, for
+  example `minModel: sonnet` to keep Haiku for routing only. If a floor is above a ceiling, the ceiling wins.
+- `logPrompts` (default `true`): set it to `false` to keep only the model and effort of each decision in
+  the log, without the prompt text.
 
-A decision above a ceiling is lowered to it. The CLI has no such option.
+A decision outside the limits is brought back to the nearest one. The CLI has no such options.
 
 ### How it works
 
@@ -81,7 +91,7 @@ The plugin hooks into three Claude Code events (`plugin/hooks/register.ts`):
 
 1. `prompt.submit`: sends the prompt (plus the last 3 exchanges, truncated) to Haiku, which replies with a
    JSON `{model, effort, reason}`. An invalid reply or an unknown model is ignored. Each decision is
-   appended to the plugin's own store (last 500 kept, prompts truncated to 500 characters), local to your
+   appended to the plugin's own store (last 500 kept, prompts truncated to 500 characters unless `logPrompts` is off), local to your
    machine.
 2. `turn.step`: replaces the model and effort of the main thread with the chosen decision.
 3. `command.run`: handles the `/auto-route` command.
